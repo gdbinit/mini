@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 	"unicode"
@@ -55,9 +54,6 @@ type Editor struct {
 	// status message and time the message was set
 	statusmsg     string
 	statusmsgTime time.Time
-
-	// specify which syntax highlight to use.
-	syntax *EditorSyntax
 
 	// original termios: used to restore the state on exit.
 	origTermios *unix.Termios
@@ -133,83 +129,6 @@ const (
 	keyHome
 	keyEnd
 )
-
-// Syntax highlight enums
-const (
-	hlNormal uint8 = iota
-	hlComment
-	hlMlComment
-	hlKeyword1
-	hlKeyword2
-	hlString
-	hlNumber
-	hlMatch
-)
-
-const (
-	HL_HIGHLIGHT_NUMBERS = 1 << iota
-	HL_HIGHLIGHT_STRINGS
-)
-
-type EditorSyntax struct {
-	// Name of the filetype displayed in the status bar.
-	filetype string
-	// List of patterns to match a filename against.
-	filematch []string
-	// List of keywords to highlight. Use '|' suffix for keyword2 highlight.
-	keywords []string
-	// scs is a single-line comment start pattern (e.g. "//" for golang).
-	// set to an empty string if comment highlighting is not needed.
-	scs string
-	// mcs is a multi-line comment start pattern (e.g. "/*" for golang).
-	mcs string
-	// mce is a multi-line comment end pattern (e.g. "*/" for golang).
-	mce string
-	// Bit field that contains flags for whether to highlight numbers and
-	// whether to highlight strings.
-	flags int
-}
-
-var HLDB = []*EditorSyntax{
-	{
-		filetype:  "c",
-		filematch: []string{".c", ".h", "cpp", ".cc"},
-		keywords: []string{
-			"switch", "if", "while", "for", "break", "continue", "return",
-			"else", "struct", "union", "typedef", "static", "enum", "class",
-			"case",
-
-			"int|", "long|", "double|", "float|", "char|", "unsigned|",
-			"signed|", "void|",
-		},
-		scs:   "//",
-		mcs:   "/*",
-		mce:   "*/",
-		flags: HL_HIGHLIGHT_NUMBERS | HL_HIGHLIGHT_STRINGS,
-	},
-	{
-		filetype:  "go",
-		filematch: []string{".go"},
-		keywords: []string{
-			"break", "default", "func", "interface", "select", "case", "defer",
-			"go", "map", "struct", "chan", "else", "goto", "package", "switch",
-			"const", "fallthrough", "if", "range", "type", "continue", "for",
-			"import", "return", "var",
-
-			"append|", "bool|", "byte|", "cap|", "close|", "complex|",
-			"complex64|", "complex128|", "error|", "uint16|", "copy|", "false|",
-			"float32|", "float64|", "imag|", "int|", "int8|", "int16|",
-			"uint32|", "int32|", "int64|", "iota|", "len|", "make|", "new|",
-			"nil|", "panic|", "uint64|", "print|", "println|", "real|",
-			"recover|", "rune|", "string|", "true|", "uint|", "uint8|",
-			"uintptr|",
-		},
-		scs:   "//",
-		mcs:   "/*",
-		mce:   "*/",
-		flags: HL_HIGHLIGHT_NUMBERS | HL_HIGHLIGHT_STRINGS,
-	},
-}
 
 type Row struct {
 	// Index within the file.
@@ -456,7 +375,7 @@ func (e *Editor) drawRows(b *strings.Builder) {
 				hl = hl[:utf8.RuneCountInString(line)]
 			}
 			currentColor := -1 // keep track of color to detect color change
-			for i, r := range []rune(line) {
+			for _, r := range []rune(line) {
 				if unicode.IsControl(r) {
 					// deal with non-printable characters (e.g. Ctrl-A)
 					sym := '?'
@@ -470,18 +389,7 @@ func (e *Editor) drawRows(b *strings.Builder) {
 						// restore the current color
 						b.WriteString(fmt.Sprintf("\x1b[%dm", currentColor))
 					}
-				} else if hl[i] == hlNormal {
-					if currentColor != -1 {
-						currentColor = -1
-						b.WriteString("\x1b[39m")
-					}
-					b.WriteRune(r)
 				} else {
-					color := syntaxToColor(hl[i])
-					if color != currentColor {
-						currentColor = color
-						b.WriteString(fmt.Sprintf("\x1b[%dm", color))
-					}
 					b.WriteRune(r)
 				}
 			}
@@ -508,11 +416,7 @@ func (e *Editor) drawStatusBar(b *strings.Builder) {
 		lmsg = runewidth.Truncate(lmsg, e.screenCols, "...")
 	}
 	b.WriteString(lmsg)
-	filetype := "no filetype"
-	if e.syntax != nil {
-		filetype = e.syntax.filetype
-	}
-	rmsg := fmt.Sprintf("%s | %d/%d", filetype, e.cy+1, len(e.rows))
+	rmsg := fmt.Sprintf("%d/%d", e.cy+1, len(e.rows))
 	l := runewidth.StringWidth(lmsg)
 	for l < e.screenCols {
 		if e.screenCols-l == runewidth.StringWidth(rmsg) {
@@ -702,7 +606,6 @@ func (e *Editor) Save() (int, error) {
 			return 0, err
 		}
 		e.filename = fname
-		e.selectSyntaxHighlight()
 	}
 
 	f, err := os.OpenFile(e.filename, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
@@ -722,7 +625,6 @@ func (e *Editor) Save() (int, error) {
 // If a file does not exist, it returns os.ErrNotExist.
 func (e *Editor) OpenFile(filename string) error {
 	e.filename = filename
-	e.selectSyntaxHighlight()
 	f, err := os.Open(filename)
 	if err != nil {
 		return err
@@ -795,191 +697,10 @@ func (e *Editor) updateRow(row *Row) {
 		}
 	}
 	row.render = b.String()
-	e.updateHighlight(row)
 }
 
 func isSeparator(r rune) bool {
 	return unicode.IsSpace(r) || strings.IndexRune(",.()+-/*=~%<>[]{}:;", r) != -1
-}
-
-func (e *Editor) updateHighlight(row *Row) {
-	row.hl = make([]uint8, utf8.RuneCountInString(row.render))
-	for i := range row.hl {
-		row.hl[i] = hlNormal
-	}
-
-	if e.syntax == nil {
-		return
-	}
-
-	prevSep := true
-
-	// set to the quote when inside of a string.
-	// set to zero when outside of a string.
-	var strQuote rune
-
-	// indicates whether we are inside a multi-line comment.
-	inComment := row.idx > 0 && e.rows[row.idx-1].hasUnclosedComment
-
-	idx := 0
-	runes := []rune(row.render)
-	for idx < len(runes) {
-		r := runes[idx]
-		prevHl := hlNormal
-		if idx > 0 {
-			prevHl = row.hl[idx-1]
-		}
-
-		if e.syntax.scs != "" && strQuote == 0 && !inComment {
-			if strings.HasPrefix(string(runes[idx:]), e.syntax.scs) {
-				for idx < len(runes) {
-					row.hl[idx] = hlComment
-					idx++
-				}
-				break
-			}
-		}
-
-		if e.syntax.mcs != "" && e.syntax.mce != "" && strQuote == 0 {
-			if inComment {
-				row.hl[idx] = hlMlComment
-				if strings.HasPrefix(string(runes[idx:]), e.syntax.mce) {
-					for j := 0; j < len(e.syntax.mce); j++ {
-						row.hl[idx] = hlMlComment
-						idx++
-					}
-					inComment = false
-					prevSep = true
-					continue
-				} else {
-					idx++
-					continue
-				}
-			} else if strings.HasPrefix(string(runes[idx:]), e.syntax.mcs) {
-				for j := 0; j < len(e.syntax.mcs); j++ {
-					row.hl[idx] = hlMlComment
-					idx++
-				}
-				inComment = true
-				continue
-			}
-		}
-
-		if (e.syntax.flags & HL_HIGHLIGHT_STRINGS) != 0 {
-			if strQuote != 0 {
-				row.hl[idx] = hlString
-				//deal with escape quote when inside a string
-				if r == '\\' && idx+1 < len(runes) {
-					row.hl[idx+1] = hlString
-					idx += 2
-					continue
-				}
-				if r == strQuote {
-					strQuote = 0
-				}
-				idx++
-				prevSep = true
-				continue
-			} else {
-				if r == '"' || r == '\'' {
-					strQuote = r
-					row.hl[idx] = hlString
-					idx++
-					continue
-				}
-			}
-		}
-
-		if (e.syntax.flags & HL_HIGHLIGHT_NUMBERS) != 0 {
-			if unicode.IsDigit(r) && (prevSep || prevHl == hlNumber) ||
-				r == '.' && prevHl == hlNumber {
-				row.hl[idx] = hlNumber
-				idx++
-				prevSep = false
-				continue
-			}
-		}
-
-		if prevSep {
-			keywordFound := false
-			for _, kw := range e.syntax.keywords {
-				isKeyword2 := strings.HasSuffix(kw, "|")
-				if isKeyword2 {
-					kw = strings.TrimSuffix(kw, "|")
-				}
-
-				end := idx + utf8.RuneCountInString(kw)
-				if end <= len(runes) && kw == string(runes[idx:end]) &&
-					(end == len(runes) || isSeparator(runes[end])) {
-					keywordFound = true
-					hl := hlKeyword1
-					if isKeyword2 {
-						hl = hlKeyword2
-					}
-					for idx < end {
-						row.hl[idx] = hl
-						idx++
-					}
-					break
-				}
-			}
-			if keywordFound {
-				prevSep = false
-				continue
-			}
-		}
-
-		prevSep = isSeparator(r)
-		idx++
-	}
-
-	changed := row.hasUnclosedComment != inComment
-	row.hasUnclosedComment = inComment
-	if changed && row.idx+1 < len(e.rows) {
-		e.updateHighlight(e.rows[row.idx+1])
-	}
-}
-
-func syntaxToColor(hl uint8) int {
-	switch hl {
-	case hlComment, hlMlComment:
-		return 90
-	case hlKeyword1:
-		return 94
-	case hlKeyword2:
-		return 96
-	case hlString:
-		return 36
-	case hlNumber:
-		return 33
-	case hlMatch:
-		return 32
-	default:
-		return 37
-	}
-}
-
-func (e *Editor) selectSyntaxHighlight() {
-	e.syntax = nil
-	if len(e.filename) == 0 {
-		return
-	}
-
-	ext := filepath.Ext(e.filename)
-
-	for _, syntax := range HLDB {
-		for _, pattern := range syntax.filematch {
-			isExt := strings.HasPrefix(pattern, ".")
-			if (isExt && pattern == ext) ||
-				(!isExt && strings.Index(e.filename, pattern) != -1) {
-				e.syntax = syntax
-				for _, row := range e.rows {
-					e.updateHighlight(row)
-				}
-				return
-			}
-		}
-	}
 }
 
 func (row *Row) insertChar(at int, c rune) {
@@ -1106,13 +827,6 @@ func (e *Editor) Find() error {
 				// set rowOffset to bottom so that the next scroll() will scroll
 				// upwards and the matching line will be at the top of the screen
 				e.rowOffset = len(e.rows)
-				// highlight the matched string
-				savedHlRowIndex = current
-				savedHl = make([]uint8, len(row.hl))
-				copy(savedHl, row.hl)
-				for i := 0; i < utf8.RuneCountInString(query); i++ {
-					row.hl[rx+i] = hlMatch
-				}
 				break
 			}
 		}
