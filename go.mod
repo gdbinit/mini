@@ -1,4 +1,4 @@
-module github.com/hibiken/mini
+module github.com/gdbinit/mini
 
 go 1.20
 
