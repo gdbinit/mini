@@ -1,7 +1,7 @@
 //go:build darwin || dragonfly || freebsd || netbsd || openbsd
 // +build darwin dragonfly freebsd netbsd openbsd
 
-package main
+package mini
 
 import "golang.org/x/sys/unix"
 
