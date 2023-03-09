@@ -842,31 +842,3 @@ func (e *Editor) Find() error {
 	}
 	return err
 }
-
-func main() {
-	var editor Editor
-
-	if err := editor.Init(); err != nil {
-		die(err)
-	}
-	defer editor.Close()
-
-	if len(os.Args) > 1 {
-		err := editor.OpenFile(os.Args[1])
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			die(err)
-		}
-	}
-
-	editor.SetStatusMessage("HELP: Ctrl-S = save | Ctrl-Q = quit | Ctrl-F = find")
-
-	for {
-		editor.Render()
-		if err := editor.ProcessKey(); err != nil {
-			if err == ErrQuitEditor {
-				break
-			}
-			die(err)
-		}
-	}
-}
