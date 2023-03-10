@@ -877,8 +877,9 @@ func (e *Editor) EditBuffer(content []byte) ([]byte, error) {
 	}
 	// if user didn't want to save we shouldn't return the buffer
 	if e.dirty > 0 {
-		return []byte{}, fmt.Errorf("unsaved dirty buffer")
+		return []byte{}, fmt.Errorf("unsaved modified buffer")
 	}
-	// XXX: missing the case where the buffer was unmodified
+	// if the buffer was unmodified the caller handles it fine
+	// and doesn't reencrypt the content already
 	return []byte(e.rowsToString()), nil
 }
