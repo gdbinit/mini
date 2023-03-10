@@ -875,5 +875,10 @@ func (e *Editor) EditBuffer(content []byte) ([]byte, error) {
 			return []byte{}, err
 		}
 	}
+	// if user didn't want to save we shouldn't return the buffer
+	if e.dirty > 0 {
+		return []byte{}, fmt.Errorf("unsaved dirty buffer")
+	}
+	// XXX: missing the case where the buffer was unmodified
 	return []byte(e.rowsToString()), nil
 }
