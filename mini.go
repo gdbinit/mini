@@ -842,3 +842,29 @@ func (e *Editor) Find() error {
 	}
 	return err
 }
+
+func (e *Editor) EditBuffer(content []byte) ([]byte, error) {
+	f := bytes.NewReader(content)
+	s := bufio.NewScanner(f)
+	for s.Scan() {
+		line := s.Bytes()
+		// strip off newline or cariage return
+		bytes.TrimRightFunc(line, func(r rune) bool { return r == '\n' || r == '\r' })
+		e.InsertRow(len(e.rows), string(line))
+	}
+	if err := s.Err(); err != nil {
+		return []byte{}, err
+	}
+	e.dirty = 0
+
+	for {
+		e.Render()
+		if err := e.ProcessKey(); err != nil {
+			if err == ErrQuitEditor {
+				break
+			}
+			return []byte{}, err
+		}
+	}
+	return []byte(e.rowsToString()), nil
+}
