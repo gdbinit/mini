@@ -57,6 +57,8 @@ type Editor struct {
 
 	// original termios: used to restore the state on exit.
 	origTermios *unix.Termios
+	// a buffer is being edited
+	isBuffer bool
 }
 
 func enableRawMode() (*unix.Termios, error) {
@@ -263,15 +265,20 @@ func (e *Editor) ProcessKey() error {
 		return ErrQuitEditor
 
 	case key(ctrl('s')):
-		n, err := e.Save()
-		if err != nil {
-			if err == ErrPromptCanceled {
-				e.SetStatusMessage("Save aborted")
-			} else {
-				e.SetStatusMessage("Can't save! I/O error: %s", err.Error())
-			}
+		if e.isBuffer {
+			// just set the buffer as clean so no warning on quit
+			e.dirty = 0
 		} else {
-			e.SetStatusMessage("%d bytes written to disk", n)
+			n, err := e.Save()
+			if err != nil {
+				if err == ErrPromptCanceled {
+					e.SetStatusMessage("Save aborted")
+				} else {
+					e.SetStatusMessage("Can't save! I/O error: %s", err.Error())
+				}
+			} else {
+				e.SetStatusMessage("%d bytes written to disk", n)
+			}
 		}
 
 	case key(ctrl('f')):
@@ -844,6 +851,8 @@ func (e *Editor) Find() error {
 }
 
 func (e *Editor) EditBuffer(content []byte) ([]byte, error) {
+	e.isBuffer = true
+
 	f := bytes.NewReader(content)
 	s := bufio.NewScanner(f)
 	for s.Scan() {
